@@ -1,15 +1,183 @@
 ### Load in the Data
+We set the seed to 1178 for reproducability. This seed with remain the same for each model run.
 ```{r}
-setwd("C:/Users/rcoleman/Documents/GitHub/Coursera/Practical Machine Learning/Course Project")
+options(stringsAsFactors=TRUE)
 
-dfTraining <- read.csv("pml-training.csv")
+set.seed(1178)
 
-dfTesting <- read.csv("pml-testing.csv")
+library(caret)
+
+setwd("/Users/richardcoleman/Git/Practical-Machine-Learning/Course Project/")
+
+dfTraining <- read.csv("pml-training.csv",row.names = NULL)
+
+dfTesting <- read.csv("pml-testing.csv", row.names = NULL)
+
+dfTraining$X <- NULL
+dfTesting$X <- NULL
+dfTraining <- dfTraining[, colSums(is.na(dfTraining)) == 0]
+
 ```
+
 ### Examine the Data
 ```{r}
 library(Hmisc)
+library(ggplot2)
 
-head(dfTraining)
-head(dfTesting)
+describe(dfTraining)
+describe(dfTraining$classe)
+
+colNames <- colnames(dfTraining)
+
+for (i in 1:ncol(dfTraining)) {
+  print(qplot(x = dfTraining[,i],data=dfTraining,geom = "histogram") +
+          labs(x = colNames[i]))
+}
 ```
+We first see that some of our predictors contain missing data. We might want to impute this before we begin to try and predict our classe variable. We also see that our data contains some outliers, which suggests we may want to transform some predictors. A log function may be a poor choise here as many predictors have zero values.
+
+### Clean The Data
+## Imputation
+```{r}
+# library(mice)
+# 
+# temp <- dfTraining[,10:20]
+# 
+# impTrain <- mice(temp,m=2)
+```
+
+
+## Scale outliers in data
+We have to be careful here, as we have many values centered at zero. We also do not want to introduce negative values to our predictors unless we are sure it makes sense.
+```{r}
+# dfTemp <- sapply(dfTraining,is.numeric)
+# 
+# dfTemp <- dfTraining[,dfTemp]
+# 
+# dfTemp <- scale(dfTemp,center=TRUE,scale=TRUE)
+# 
+# colnames(dfTemp) <- paste0(colnames(dfTemp),"_std")
+# 
+# x <- cbind(dfTraining,dfTemp)
+```
+
+### Examine the relationship between our dependent and independent variables
+```{r}
+colNames <- colnames(dfTraining)
+
+for(i in 1:ncol(dfTraining)) {
+  print(ggplot(data = dfTraining, aes(y=dfTraining[,i],x=dfTraining$classe)) +
+    geom_point() + 
+    labs(y = colNames[i], x = "classe"))
+}
+```
+
+### Split Data into Training/Test/Validation
+```{r}
+inBuild <- createDataPartition(y=dfTraining$classe,p=.7,list=FALSE)
+
+buildData <- dfTraining[inBuild,]
+
+validation <- dfTraining[-inBuild,]
+
+inTrain <- createDataPartition(y=buildData$classe,p=.6,list=FALSE)
+
+training <- buildData[inTrain,]
+
+testing <- buildData[-inTrain,]
+```
+
+### Variable Selection
+```{r}
+# library(Hmisc)
+# 
+# corr <- rcorr(training,type="pearson")
+
+x <- filterVarImp(x = training[, -ncol(training)], y = training$classe)
+
+print(x)
+```
+### Multinomial Regression
+```{r}
+library(caret)
+library(doParallel)
+registerDoParallel(cores=2)
+
+dfTemp <- sapply(training,is.numeric)
+
+dfTemp <- training[,dfTemp]
+dfTemp$classe <- training$classe
+
+fitControl <- trainControl(## 2-fold CV
+                           method = "repeatedcv",
+                           number = 5,
+                           ## repeated 2 times
+                           repeats = 5)
+  
+lm1 <- train(classe ~ .
+             ,method="multinom"
+             ,trControl = fitControl
+             ,preProcess ="pca"
+             , data=dfTemp)
+
+#training evaluation
+lm1Pred <- predict(lm1,training)
+confusionMatrix(lm1Pred, training$classe)
+# 
+# logReg <- lm$finalModel
+# 
+# print(logReg)
+```
+The performance for our multinomial regression is very poor to begin with (out of sample error of 0.5565). This suggests that I might try a non linear approach such as Random Forest.
+
+### Random Forest
+```{r}
+library(caret)
+library(doParallel)
+registerDoParallel(cores=2)
+
+dfTemp <- sapply(training,is.numeric)
+
+dfTemp <- training[,dfTemp]
+dfTemp$classe <- training$classe
+#dfTemp$max_yaw_dumbbell <- training$max_yaw_dumbbell
+
+fitControl <- trainControl(## 3-fold CV
+                           method = "repeatedcv",
+                           number = 3,
+                           ## repeated 3 times
+                           repeats = 3)
+
+rf1 <- train(classe ~ .
+             ,method="rf"
+             ,trControl = fitControl
+             ,preProcess ="pca"
+             , data=dfTemp)
+
+finMod2 <- rf1$finalModel
+print(finMod2)
+
+#training evaluation
+rf1Pred <- predict(rf1,training)
+confusionMatrix(rf1Pred, training$classe)
+
+#validation evaluation
+rf1Pred <- predict(rf1,validation)
+confusionMatrix(rf1Pred, validation$classe)
+
+```
+### Pick our model
+Now that we have evaluated our two models on our training and validation set, it is time to see how well they both generalize to our testing set. This will help us decide which model we choose for the programming part of this assignment.
+```{r}
+
+#Random Forest
+rf1Pred <- predict(rf1,testing)
+confusionMatrix(rf1Pred, testing$classe)
+
+#Multinomial Logit
+
+lm1Pred <- predict(lm1,testing)
+confusionMatrix(lm1Pred, testing$classe)
+```
+
+Our final results show that our random forest model provides better accuracy but also generalizes better against our test set.
